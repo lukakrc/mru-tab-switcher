@@ -108,6 +108,18 @@ function touchTab(windowId, tabId) {
   persistMru();
 }
 
+// Slot a tab in at index 1: index 0 is the tab you are on, so 1 is the first
+// thing the switcher offers. Used for tabs opened in the background, which have
+// never been active and so would otherwise never enter the list at all —
+// cmd-clicking a link and immediately reaching for the switcher is exactly when
+// you want that tab, and it was the one tab you could not reach.
+function insertAsNextTarget(windowId, tabId) {
+  const list = (mruByWindow.get(windowId) || []).filter((id) => id !== tabId);
+  list.splice(1, 0, tabId);
+  mruByWindow.set(windowId, list);
+  persistMru();
+}
+
 function faviconUrlFor(pageUrl) {
   // tab.favIconUrl is empty for chrome:// pages; this API resolves an icon for
   // any URL, internal pages included.
@@ -228,6 +240,7 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
 
 chrome.tabs.onCreated.addListener((tab) => {
   if (tab.active) touchTab(tab.windowId, tab.id);
+  else insertAsNextTarget(tab.windowId, tab.id);
 });
 
 // A tab you are sitting on can change without ever being re-activated, which

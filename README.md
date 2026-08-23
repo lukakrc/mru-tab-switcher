@@ -86,6 +86,16 @@ the extension loading), and the tab list is gathered with a single
 Commands are queued per window, because OS key-repeat can deliver a new command
 before the previous one's async work has finished.
 
+### Background-opened tabs
+
+A tab opened in the background (cmd-clicking a link) is slotted in at index 1 —
+index 0 being the tab you are on, so 1 is the first thing the switcher offers.
+Open several and the newest leads, matching most-recently-used order.
+
+Without this they never entered the list at all: the MRU order is built from tab
+*activations*, and a background tab has never been activated, so the one tab you
+most likely wanted was the one tab the switcher could not reach.
+
 ### Restricted pages
 
 Chrome forbids content scripts on `chrome://` pages and the Web Store, so no
