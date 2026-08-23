@@ -157,10 +157,6 @@ cached, but a screenshot captures whatever was on the page, signed-in content
 included. To wipe the cache, run `chrome.storage.local.clear()` in the service
 worker console (`chrome://extensions` → **service worker**).
 
-Captures are downscaled to 400px wide before being kept — the card only renders
-at 190px, so full-resolution frames are pure waste — and then mirrored into
-`chrome.storage.session` under `thumb:<tabId>`, pruned when a tab closes and
-capped at 40 entries. The downscale is what makes storing them affordable at
-all. Holding them in memory only meant they disappeared every time the service
-worker was terminated, which Chrome does ~30s after it goes idle — so focusing
-another app and coming back emptied every thumbnail.
+## License
+
+[MIT](LICENSE) © Luka Krcmar
