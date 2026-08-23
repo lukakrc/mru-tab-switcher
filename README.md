@@ -25,7 +25,7 @@ extension loading. The manifest therefore declares a harmless `MacCtrl+Q`
 default, and the real binding is applied through a private API that bypasses
 that restriction.
 
-Open `chrome://extensions/shortcuts`, open DevTools (`⌘⌥J`), write "allow pasting" and run:
+Open `chrome://extensions/shortcuts`, open DevTools (`⌘⌥J`), write "allow pasting and run it, after that paste this:
 
 ```js
 chrome.developerPrivate.getExtensionsInfo()
