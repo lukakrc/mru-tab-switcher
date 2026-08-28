@@ -61,6 +61,14 @@ you leave it. On the shortcut it freezes the current MRU list, shows
 `overlay.js` in the active tab, and advances the highlight on each press. The
 overlay watches for the real `keyup` and reports the chosen index back.
 
+### Clicking while held
+
+macOS treats Control+click as a secondary click, so with the switcher's own
+modifier down a card click arrives as `contextmenu` and never as `click` — the
+page's menu would open over the panel and nothing would be selected. The overlay
+suppresses `contextmenu` anywhere inside the panel and treats a hit on a card as
+the pick it was meant to be. On Windows and Linux the handler never fires.
+
 ### Ending the hold
 
 Keyboard events go to whichever frame has focus, so the top document alone is
@@ -69,12 +77,26 @@ hang on screen. `overlay.js` therefore runs in all frames: sub-frames draw
 nothing and only forward a release to the background, which broadcasts the
 teardown rather than assuming the sender owned the panel.
 
-Focus in browser UI (the omnibox) is not recoverable that way — no frame sees
-any key event at all. The overlay reports `document.hasFocus()` when it paints,
-and a cycle that starts unfocused expires in 4s instead of 30s so the panel
-can't strand. Window blur, tab hide, and a mousedown outside the panel also
-dismiss it. Those all *cancel* rather than commit: a stray click or an app
-switch is not a choice of tab.
+Focus in browser UI (the omnibox, DevTools) is not recoverable that way — no
+frame sees any key event at all. So the panel polices its own lifetime with an
+interval **in the page**, not a timer in the service worker: MV3 suspends the
+worker between events and drops pending `setTimeout`s, which is why a missed
+release used to leave the panel up indefinitely.
+
+Each tick re-checks `document.hasFocus()`. Unfocused and idle past
+`UNFOCUSED_IDLE_MS` (700ms) it commits — there is no release to wait for, and
+pressing the shortcut was a request to switch, so honouring it beats discarding
+it. That figure is the visible hang in this case, so it is kept only as long as
+a comfortable tap cadence needs. Focused and idle past `MAX_PANEL_MS` (30s) it
+cancels instead: at that distance the highlighted tab is no longer a safe guess
+at intent. Window blur, tab hide, and a mousedown outside the panel also cancel.
+
+The overlay additionally records when it last saw a release, from page load
+rather than from when the panel paints, and reports it back. A cold service
+worker can take long enough to restore its caches that a quick tap-and-release
+finishes before the panel exists; the timestamp survives even though the event
+does not, and `startCycle` commits immediately when it sees one newer than the
+keypress.
 
 Everything before the overlay's first paint is on the critical path: if it
 appears later than the release of a quick tap, the panel just flashes and
@@ -99,21 +121,19 @@ most likely wanted was the one tab the switcher could not reach.
 ### Restricted pages
 
 Chrome forbids content scripts on `chrome://` pages and the Web Store, so no
-overlay can render while one is in front. A cycle started there runs in **blind
-mode**: no UI, and each press steps back one tab immediately, walking the same
-frozen list so repeated taps still traverse history correctly. Start a cycle
-from any normal page and you get the full hold-to-preview overlay.
+overlay can render while one is in front. The shortcut there does a **stateless
+single jump** to the most recent tab and stores nothing (`quickSwitch`). Start a
+cycle from any normal page and you get the full hold-to-preview overlay.
 
-Blind mode deliberately stays blind for the whole cycle rather than popping the
-overlay up once it reaches a scriptable tab. Switching to a tab and injecting
-into it takes three async hops, and a quick tap-and-release fires `keyup` during
-them — before the overlay's listener exists. That release is unrecoverable, and
-the panel would hang on screen until the cycle expired. An overlay that can't
-observe its own dismissal is worse than no overlay.
+Earlier versions kept a "blind" cycle on those pages so repeated taps could keep
+walking the list without UI. That state was the source of a long tail of bugs —
+once created it could survive in ways that stopped the overlay appearing on
+normal pages too — and holding nothing means there is nothing to leak into the
+next cycle.
 
-Cycle state expires after 1.5s in blind mode (nothing else can end it) versus
-30s in overlay mode, where the overlay itself detects the release. Expiry never
-switches tabs — it ends the cycle and leaves you where you are.
+A cycle only ever exists while a panel is on screen. Its expiry never switches
+tabs: timing out means we lost track of the hold, not that you chose the
+highlighted tab.
 
 **Expiry is enforced by timestamp, not by the timer.** MV3 service workers are
 suspended between events and pending `setTimeout` callbacks are dropped, so a

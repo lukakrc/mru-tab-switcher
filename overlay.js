@@ -216,10 +216,16 @@
   // to remove the panel and it hung indefinitely. A timer in the page runs for
   // as long as the tab is visible, which is exactly the window in which the
   // panel can be on screen.
-  const WATCHDOG_TICK_MS = 500;
+  const WATCHDOG_TICK_MS = 120;
   // No keyup can reach a document that doesn't have focus (the omnibox, another
-  // app), so once idle this long there is nothing left to wait for.
-  const UNFOCUSED_IDLE_MS = 2500;
+  // app), so once idle this long there is nothing left to wait for. This is the
+  // visible hang when a release goes unseen — worst case is this plus one tick —
+  // so it is kept only as long as a comfortable tap cadence needs, not as long
+  // as a pause to read: while unfocused there is no release to read *for*, since
+  // letting go cannot be observed. hasFocus is re-checked every tick, so focus
+  // arriving late (right after a tab or window switch) cancels this path rather
+  // than racing it.
+  const UNFOCUSED_IDLE_MS = 700;
   // Absolute ceiling for a focused page, where a real release is expected.
   const MAX_PANEL_MS = 30000;
   let watchdogId = null;
@@ -442,6 +448,19 @@
     teardown();
   }
 
+  // macOS treats Control+click as a secondary click, and the switcher is used
+  // with Control held — so clicking a card fires contextmenu instead of click,
+  // popping the page's menu over the panel and selecting nothing. Suppress the
+  // menu anywhere inside the panel and treat a hit on a card as the pick it was
+  // meant to be. On Windows and Linux this simply never fires.
+  function onCardContextMenu(e) {
+    e.preventDefault();
+    const idx = cardIndexFromEvent(e);
+    if (idx === -1) return; // panel background — menu suppressed, nothing picked
+    chrome.runtime.sendMessage({ type: 'confirm-switch', index: idx });
+    teardown();
+  }
+
   function sameTabList(a, b) {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
@@ -480,6 +499,7 @@
       // Shadow-scoped listeners die with the shadow root, so these belong here.
       shadow.addEventListener('mousemove', onCardHover);
       shadow.addEventListener('click', onCardClick);
+      shadow.addEventListener('contextmenu', onCardContextMenu);
     }
 
     buildPanel();
