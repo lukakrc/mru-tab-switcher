@@ -236,8 +236,13 @@
   let cardEls = [];
   let tabsData = [];
   let currentIndex = 0;
-  let lastMouseX = null;
-  let lastMouseY = null;
+  // How far the pointer must travel before it may take the selection from the
+  // keyboard. The panel often appears directly under a resting cursor, and any
+  // threshold below "a deliberate move" means an accidental nudge decides which
+  // tab you land on.
+  const HOVER_ENGAGE_PX = 12;
+  let hoverAnchorX = null;
+  let hoverAnchorY = null;
 
   function img(className, src) {
     const el = document.createElement('img');
@@ -324,8 +329,17 @@
     }
   }
 
+  function resetHoverAnchor() {
+    hoverAnchorX = null;
+    hoverAnchorY = null;
+  }
+
   function noteActivity() {
     lastActivityAt = Date.now();
+    // A keyboard step takes the selection back. The pointer has to travel
+    // HOVER_ENGAGE_PX again from wherever it now rests before it can claim it,
+    // so a cursor parked over a card cannot quietly override the cycling.
+    resetHoverAnchor();
     if (watchdogId === null) watchdogId = setInterval(checkWatchdog, WATCHDOG_TICK_MS);
   }
 
@@ -342,8 +356,7 @@
     // noteActivity, so this only fires on a genuine pause.
     if (!document.hasFocus() && idle > UNFOCUSED_IDLE_MS) {
       dlog('watchdog: unfocused and idle, committing', { idle });
-      chrome.runtime.sendMessage({ type: 'confirm-switch', index: currentIndex });
-      teardown();
+      commit(currentIndex);
       return;
     }
 
@@ -372,8 +385,7 @@
       shadow = null;
     }
     cardEls = [];
-    lastMouseX = null;
-    lastMouseY = null;
+    resetHoverAnchor();
     // Listeners are deliberately NOT removed — see the registration below.
   }
 
@@ -390,7 +402,15 @@
     if (!endsHold(e)) return;
     lastReleaseAt = Date.now();
     if (!host) return; // no panel yet; the timestamp above is the record of it
-    chrome.runtime.sendMessage({ type: 'confirm-switch', index: currentIndex });
+    commit(currentIndex);
+  }
+
+  // The two ways a cycle can end from inside the page. Both take the panel down
+  // here rather than waiting for the background to answer — the teardown message
+  // it broadcasts will arrive either way, and a panel that lingers for a round
+  // trip after the modifier is released reads as lag.
+  function commit(index) {
+    chrome.runtime.sendMessage({ type: 'confirm-switch', index });
     teardown();
   }
 
@@ -428,13 +448,24 @@
   }
 
   function onCardHover(e) {
-    // Deliberately mousemove rather than mouseover: mouseover also fires when a
-    // new element lands under a stationary cursor, which would let a cursor
-    // that merely happens to rest over the panel steal the highlight away from
-    // keyboard cycling. Comparing coordinates keeps it to real movement.
-    if (lastMouseX === e.clientX && lastMouseY === e.clientY) return;
-    lastMouseX = e.clientX;
-    lastMouseY = e.clientY;
+    // mousemove rather than mouseover, because mouseover also fires when a new
+    // element lands under a stationary cursor. That alone was not enough: a
+    // single pixel of drift counted as movement, so a cursor that merely
+    // happened to sit over a card took the highlight, and releasing the
+    // modifier then switched to that tab instead of the cycled one.
+    //
+    // The pointer now has to travel a real distance from where it was when the
+    // keyboard last acted. Below that it is treated as resting, however much it
+    // jitters.
+    if (hoverAnchorX === null) {
+      hoverAnchorX = e.clientX;
+      hoverAnchorY = e.clientY;
+      return;
+    }
+
+    const dx = e.clientX - hoverAnchorX;
+    const dy = e.clientY - hoverAnchorY;
+    if (dx * dx + dy * dy < HOVER_ENGAGE_PX * HOVER_ENGAGE_PX) return;
 
     const idx = cardIndexFromEvent(e);
     if (idx === -1 || idx === currentIndex) return;
@@ -444,8 +475,7 @@
   function onCardClick(e) {
     const idx = cardIndexFromEvent(e);
     if (idx === -1) return;
-    chrome.runtime.sendMessage({ type: 'confirm-switch', index: idx });
-    teardown();
+    commit(idx);
   }
 
   // macOS treats Control+click as a secondary click, and the switcher is used
@@ -457,8 +487,7 @@
     e.preventDefault();
     const idx = cardIndexFromEvent(e);
     if (idx === -1) return; // panel background — menu suppressed, nothing picked
-    chrome.runtime.sendMessage({ type: 'confirm-switch', index: idx });
-    teardown();
+    commit(idx);
   }
 
   function sameTabList(a, b) {
@@ -467,6 +496,18 @@
       if (a[i].id !== b[i].id) return false;
     }
     return true;
+  }
+
+  // What every reply to the background carries. tryShowOverlay inspects it to
+  // decide whether the panel really painted, and startCycle compares releasedAt
+  // against its own start time to spot a hold that ended before we got here.
+  function panelState() {
+    return {
+      ok: true,
+      painted: !!host,
+      focused: document.hasFocus(),
+      releasedAt: lastReleaseAt,
+    };
   }
 
   function showOverlay(tabs, index, debug) {
@@ -523,21 +564,11 @@
     try {
       if (msg.type === 'show') {
         showOverlay(msg.tabs, msg.index, msg.debug);
-        sendResponse({
-          ok: true,
-          painted: !!host,
-          focused: document.hasFocus(),
-          releasedAt: lastReleaseAt,
-        });
+        sendResponse(panelState());
       } else if (msg.type === 'update') {
         noteActivity();
         setActive(msg.index);
-        sendResponse({
-          ok: true,
-          painted: !!host,
-          focused: document.hasFocus(),
-          releasedAt: lastReleaseAt,
-        });
+        sendResponse(panelState());
       } else if (msg.type === 'teardown') {
         teardown();
         sendResponse({ ok: true, painted: false });
