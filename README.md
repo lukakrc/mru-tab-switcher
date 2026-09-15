@@ -55,11 +55,36 @@ Notes:
 
 ## How it works
 
-`background.js` tracks per-window MRU order (persisted to session storage so it
-survives service-worker restarts) and caches a JPEG screenshot of each tab as
-you leave it. On the shortcut it freezes the current MRU list, shows
+The service worker tracks per-window MRU order (persisted to session storage so
+it survives service-worker restarts) and caches a downscaled WebP screenshot of
+each tab as you leave it. On the shortcut it freezes the current MRU list, shows
 `overlay.js` in the active tab, and advances the highlight on each press. The
 overlay watches for the real `keyup` and reports the chosen index back.
+
+| File | Responsibility |
+| --- | --- |
+| `background.js` | Entry point: wires Chrome events, serialises commands per window, builds a cycle's tab list |
+| `lib/mru.js` | Per-window most-recently-used order and its session-storage mirror |
+| `lib/thumbnails.js` | Screenshot capture, downscaling, and the two-tier (memory + disk) cache |
+| `lib/cycle.js` | Cycle state, overlay messaging, and expiry backstops |
+| `lib/tabs.js`, `lib/async.js`, `lib/log.js` | Shared helpers |
+| `overlay.js` | The on-page panel; owns the `keyup` that ends a hold |
+
+The service worker is an ES module (`"type": "module"` in the manifest), so
+`lib/` is imported directly — no bundler.
+
+### Pointer vs keyboard selection
+
+Hovering a card selects it, but only after the pointer travels
+`HOVER_ENGAGE_PX` (12px) from where it sat when the keyboard last acted. The
+panel appears centred, often directly under a resting cursor, and treating any
+movement as intent meant a pixel of drift handed the selection to whatever card
+happened to be underneath — so releasing the modifier switched to the wrong tab.
+
+Every keyboard step re-anchors the pointer, so the most recent *deliberate*
+input wins in both directions: cycling takes the selection back from a parked
+cursor, and a real mouse movement takes it back from the keyboard. Clicks are
+unambiguous and always act on the card clicked, threshold or not.
 
 ### Clicking while held
 
