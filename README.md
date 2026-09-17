@@ -1,3 +1,5 @@
+![MRU Tab Switcher cover](cover.png)
+
 # MRU Tab Switcher
 
 Arc-style most-recently-used tab switching for Chrome. Hold `Control` and tap
