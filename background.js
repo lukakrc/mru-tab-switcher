@@ -1,6 +1,6 @@
 import { log, errMsg } from './lib/log.js';
 import { withTimeout } from './lib/async.js';
-import { activateTab, faviconUrlFor } from './lib/tabs.js';
+import { activateTab, displayTitle, faviconUrlFor } from './lib/tabs.js';
 import {
   ensureMru,
   forgetWindow,
@@ -154,8 +154,10 @@ async function buildTabInfos(windowId, ids) {
     const group = t.groupId > -1 ? groupById.get(t.groupId) : null;
     tabInfos.push({
       id: t.id,
-      title: t.title || t.url || 'Untitled',
+      title: displayTitle(t),
       favIconUrl: faviconUrlFor(t.url) || t.favIconUrl || '',
+      // For the no-thumbnail placeholder, which draws the icon at 32px.
+      favIconLarge: faviconUrlFor(t.url, 64) || t.favIconUrl || '',
       thumbnail: thumbnailFor(t.url),
       group: group ? { title: group.title || '', color: group.color } : null,
     });

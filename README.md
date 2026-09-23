@@ -75,6 +75,37 @@ overlay watches for the real `keyup` and reports the chosen index back.
 The service worker is an ES module (`"type": "module"` in the manifest), so
 `lib/` is imported directly — no bundler.
 
+### Other extensions restyling the panel
+
+The panel lives in a **closed** shadow root. Dark Reader walks every *open*
+shadow root on a page via `element.shadowRoot` and injects its own stylesheets
+into it — with an open root it turned the panel dark and the selection
+near-black on top of it, so the highlighted tab disappeared on every site it
+was darkening. It offers no per-element opt-out; its only lock is a page-wide
+`<meta name="darkreader-lock">` that would switch it off for the whole site,
+which an extension must never inject into someone else's page. A closed root
+makes `element.shadowRoot` return `null`, and the overlay never needed it —
+`shadow` is its own handle. The same protection applies to any other
+extension or page script that restyles whatever it can reach.
+
+Dark Reader's *Filter* modes still apply because they filter the whole page,
+panel included; only its default *Dynamic* mode is kept out.
+
+### Layout
+
+At full size six 190px columns need about 1180px, so a narrower window — two
+side by side on a laptop, say — used to clip the outer columns off both edges,
+the current tab included. The grid now fits the window: cards shrink first,
+down to `MIN_CARD_WIDTH_PX` (140), which keeps the one-row-up-to-six,
+then-two-rows shape through moderately narrow windows; only below that does a
+column go and the tabs flow onto another row. A window too short for every row
+scrolls inside the panel, and the selection is kept in view.
+
+The panel eases in over 140ms on first appearance — front-loaded, so it is
+over half opaque one frame after it appears and never reads as delay. A rebuild
+mid-cycle (a tab closing) does not replay it. macOS "Reduce motion" drops the
+animation, and "Reduce transparency" swaps the frosted panel for an opaque one.
+
 ### Pointer vs keyboard selection
 
 Hovering a card selects it, but only after the pointer travels
@@ -177,8 +208,10 @@ A tab in a named Chrome tab group gets a small badge in the top-left of its
 thumbnail, tinted with that group's own colour (`chrome.tabGroups` reports a
 colour *name*, so `GROUP_COLORS` in `overlay.js` maps those to Chrome's
 palette). Unnamed groups get no badge — a nameless pill communicates nothing.
-Groups are fetched with a single `chrome.tabGroups.query` alongside the tab
-query, in the same parallel step, since this is on the pre-paint critical path.
+Each palette entry carries its own text colour: yellow and orange take dark
+text, since white on either is roughly 2:1 contrast. Groups are fetched with a
+single `chrome.tabGroups.query` alongside the tab query, in the same parallel
+step, since this is on the pre-paint critical path.
 
 ### Thumbnails
 

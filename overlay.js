@@ -4,6 +4,13 @@
 
   const CARD_WIDTH_PX = 190;
   const MAX_COLUMNS = 6;
+  const PANEL_PADDING_PX = 10;
+  const GRID_GAP_PX = 4;
+  // Breathing room between the panel and the window edge.
+  const VIEWPORT_MARGIN_PX = 24;
+  // How small a card may get before a column is given up instead. Below this
+  // the thumbnails stop being recognisable at a glance, which is their job.
+  const MIN_CARD_WIDTH_PX = 140;
 
   // Which key ending the hold commits the highlighted tab. Kept general rather
   // than hardcoding Control so the switcher still works if the command is
@@ -52,17 +59,18 @@
 
   // chrome.tabGroups reports a color name, not a value. These approximate
   // Chrome's own group palette so a badge reads as the same group you see in
-  // the tab strip.
+  // the tab strip. Each carries its own text colour: white on yellow or orange
+  // is roughly 2:1 contrast, which at 10px is closer to decoration than text.
   const GROUP_COLORS = {
-    grey: '#5F6368',
-    blue: '#1A73E8',
-    red: '#D93025',
-    yellow: '#F9AB00',
-    green: '#1E8E3E',
-    pink: '#D01884',
-    purple: '#9334E6',
-    cyan: '#007B83',
-    orange: '#FA903E',
+    grey: { bg: '#5F6368', fg: '#FFFFFF' },
+    blue: { bg: '#1A73E8', fg: '#FFFFFF' },
+    red: { bg: '#D93025', fg: '#FFFFFF' },
+    yellow: { bg: '#F9AB00', fg: '#202124' },
+    green: { bg: '#1E8E3E', fg: '#FFFFFF' },
+    pink: { bg: '#D01884', fg: '#FFFFFF' },
+    purple: { bg: '#9334E6', fg: '#FFFFFF' },
+    cyan: { bg: '#007B83', fg: '#FFFFFF' },
+    orange: { bg: '#FA903E', fg: '#202124' },
   };
 
   const STYLE = `
@@ -75,9 +83,11 @@
        readable against it is a variable, so the two themes can't drift. */
     .panel {
       --panel-bg: rgba(255, 255, 255, 0.86);
+      --panel-edge: rgba(0, 0, 0, 0.06);
       --card-active: rgba(0, 0, 0, 0.14);
       --card-active-ring: rgba(0, 0, 0, 0.32);
       --title: #1a1a1a;
+      --title-active: #1a1a1a;
       --thumb-bg: #f4f5f7;
       --thumb-ring: rgba(0, 0, 0, 0.08);
       --favicon-blank: rgba(0, 0, 0, 0.12);
@@ -87,26 +97,77 @@
       left: 50%;
       transform: translate(-50%, -50%);
       display: grid;
-      gap: 4px;
-      padding: 10px;
+      gap: ${GRID_GAP_PX}px;
+      padding: ${PANEL_PADDING_PX}px;
+      /* A window too short for every row scrolls inside the panel rather than
+         pushing cards off-screen; setActive keeps the selection in view. */
+      max-height: calc(100vh - ${2 * VIEWPORT_MARGIN_PX}px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       background: var(--panel-bg);
+      /* Concentric with the cards: outer radius = card radius + panel padding. */
       border-radius: 22px;
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.1);
+      /* The hairline gives the edge definition the soft shadow can't on its own,
+         most of all over a dark page, where the shadow disappears. */
+      box-shadow:
+        inset 0 0 0 1px var(--panel-edge),
+        0 24px 60px rgba(0, 0, 0, 0.35),
+        0 2px 8px rgba(0, 0, 0, 0.1);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       backdrop-filter: blur(24px) saturate(1.6);
       -webkit-backdrop-filter: blur(24px) saturate(1.6);
       pointer-events: auto;
+      /* It is chrome, not content: a click-drag or double-click on a title
+         should never leave a text selection behind. */
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Fast and front-loaded, so it softens the arrival without reading as
+       delay — over half opaque one frame (~16ms) after it appears. Only on
+       first appearance: a rebuild mid-cycle (a tab closed) must not blink
+       the panel. */
+    @keyframes panel-enter {
+      from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
+      to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    }
+    .panel--enter {
+      animation: panel-enter 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .panel--enter { animation: none; }
     }
     @media (prefers-color-scheme: dark) {
       .panel {
         --panel-bg: rgba(32, 33, 36, 0.88);
-        --card-active: rgba(255, 255, 255, 0.18);
-        --card-active-ring: rgba(255, 255, 255, 0.75);
+        --panel-edge: rgba(255, 255, 255, 0.10);
+        /* Selection is a light tile rather than a lighter grey. The thumbnail
+           covers most of a card, so a fill only shows in the thin frame and
+           the title row — and next to mostly-white page thumbnails, a grey a
+           few shades up from the panel (or a white ring hugging a white
+           thumbnail) simply didn't register. A near-white tile does, with the
+           title flipped dark to stay readable on it. No ring: the tile is the
+           edge. */
+        --card-active: rgba(255, 255, 255, 0.85);
+        --card-active-ring: transparent;
         --title: #e8eaed;
+        --title-active: #1a1a1a;
         --thumb-bg: #2a2b2e;
         --thumb-ring: rgba(255, 255, 255, 0.12);
         --favicon-blank: rgba(255, 255, 255, 0.20);
       }
+    }
+    /* macOS "Reduce transparency". The frosted look is the first thing that
+       setting exists to turn off. */
+    @media (prefers-reduced-transparency: reduce) {
+      .panel {
+        --panel-bg: rgb(250, 250, 250);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+    }
+    @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+      .panel { --panel-bg: rgb(32, 33, 36); }
     }
     .card {
       display: flex;
@@ -129,6 +190,9 @@
     .card--active {
       background: var(--card-active);
       box-shadow: inset 0 0 0 2px var(--card-active-ring);
+    }
+    .card--active .title {
+      color: var(--title-active);
     }
     .thumb-wrap {
       position: relative;
@@ -233,6 +297,7 @@
 
   let host = null;
   let shadow = null;
+  let panelEl = null;
   let cardEls = [];
   let tabsData = [];
   let currentIndex = 0;
@@ -249,6 +314,8 @@
     el.className = className;
     el.src = src;
     el.alt = '';
+    // Dragging a thumbnail would otherwise lift a ghost copy of it off the panel.
+    el.draggable = false;
     return el;
   }
 
@@ -267,7 +334,9 @@
       // No screenshot yet (tab not visited since the worker started, or it's a
       // page we can't capture) — show the favicon centered on a blank plate.
       const blank = div('thumb thumb--blank');
-      if (tab.favIconUrl) blank.appendChild(img('thumb-fallback-icon', tab.favIconUrl));
+      // Drawn at 32px, so it needs the 64px source on a 2x display.
+      const icon = tab.favIconLarge || tab.favIconUrl;
+      if (icon) blank.appendChild(img('thumb-fallback-icon', icon));
       wrap.appendChild(blank);
     }
 
@@ -276,7 +345,9 @@
     if (tab.group && tab.group.title) {
       const badge = div('group-badge');
       badge.textContent = tab.group.title;
-      badge.style.background = GROUP_COLORS[tab.group.color] || GROUP_COLORS.grey;
+      const colors = GROUP_COLORS[tab.group.color] || GROUP_COLORS.grey;
+      badge.style.background = colors.bg;
+      badge.style.color = colors.fg;
       wrap.appendChild(badge);
     }
 
@@ -298,17 +369,31 @@
     return card;
   }
 
+  // Fit the grid to the window. At full size six columns need ~1180px, so any
+  // narrower window — two side by side on a laptop, say — used to clip the
+  // outer columns off both edges, the current tab included. Cards shrink first,
+  // which keeps the one-or-two-row shape through moderately narrow windows;
+  // only once they would fall below MIN_CARD_WIDTH_PX does a column go and the
+  // tabs flow onto another row.
+  function gridFor(count) {
+    const available = window.innerWidth - 2 * (VIEWPORT_MARGIN_PX + PANEL_PADDING_PX);
+    const widthAt = (cols) => Math.floor((available - (cols - 1) * GRID_GAP_PX) / cols);
+    let columns = Math.min(Math.max(count, 1), MAX_COLUMNS);
+    while (columns > 1 && widthAt(columns) < MIN_CARD_WIDTH_PX) columns--;
+    return { columns, cardWidth: Math.max(1, Math.min(CARD_WIDTH_PX, widthAt(columns))) };
+  }
+
   // Full rebuild — only on a new cycle or when the tab list itself changes.
-  function buildPanel() {
+  function buildPanel(animate) {
     shadow.replaceChildren();
 
     const style = document.createElement('style');
     style.textContent = STYLE;
     shadow.appendChild(style);
 
-    const panel = div('panel');
-    const columns = Math.min(Math.max(tabsData.length, 1), MAX_COLUMNS);
-    panel.style.gridTemplateColumns = `repeat(${columns}, ${CARD_WIDTH_PX}px)`;
+    const panel = div(animate ? 'panel panel--enter' : 'panel');
+    const { columns, cardWidth } = gridFor(tabsData.length);
+    panel.style.gridTemplateColumns = `repeat(${columns}, ${cardWidth}px)`;
 
     cardEls = tabsData.map((tab, i) => {
       const card = buildCard(tab, i);
@@ -316,6 +401,7 @@
       return card;
     });
 
+    panelEl = panel;
     shadow.appendChild(panel);
     setActive(currentIndex);
   }
@@ -326,6 +412,11 @@
     currentIndex = index;
     for (let i = 0; i < cardEls.length; i++) {
       cardEls[i].classList.toggle('card--active', i === index);
+    }
+    // Only matters when the window is short enough for the grid to scroll.
+    const active = cardEls[index];
+    if (active && panelEl && panelEl.scrollHeight > panelEl.clientHeight) {
+      active.scrollIntoView({ block: 'nearest' });
     }
   }
 
@@ -384,6 +475,7 @@
       host = null;
       shadow = null;
     }
+    panelEl = null;
     cardEls = [];
     resetHoverAnchor();
     // Listeners are deliberately NOT removed — see the registration below.
@@ -528,7 +620,8 @@
       return;
     }
 
-    if (!host) {
+    const fresh = !host;
+    if (fresh) {
       host = document.createElement('div');
       host.id = 'mru-tab-switcher-host';
       // pointer-events: none so the full-viewport host never blocks the page;
@@ -536,14 +629,22 @@
       host.style.cssText =
         'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
       document.documentElement.appendChild(host);
-      shadow = host.attachShadow({ mode: 'open' });
+      // Closed, so nothing else on the page can reach in. Dark Reader walks
+      // every *open* shadow root it can find via element.shadowRoot and injects
+      // its own stylesheets, rewriting colours — it turned the panel dark and
+      // the selection near-black on top of it, invisible. It has no per-element
+      // opt-out (only a page-wide lock we must never set), but a closed root
+      // makes element.shadowRoot return null, and we never need it: `shadow`
+      // is our handle. This also keeps out any other extension or page script
+      // that restyles what it can see.
+      shadow = host.attachShadow({ mode: 'closed' });
       // Shadow-scoped listeners die with the shadow root, so these belong here.
       shadow.addEventListener('mousemove', onCardHover);
       shadow.addEventListener('click', onCardClick);
       shadow.addEventListener('contextmenu', onCardContextMenu);
     }
 
-    buildPanel();
+    buildPanel(fresh);
   }
 
   // Registered once at page load and never removed. The keyup listener has to
