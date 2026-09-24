@@ -179,19 +179,37 @@ most likely wanted was the one tab the switcher could not reach.
 ### Restricted pages
 
 Chrome forbids content scripts on `chrome://` pages and the Web Store, so no
-overlay can render while one is in front. The shortcut there does a **stateless
-single jump** to the most recent tab and stores nothing (`quickSwitch`). Start a
-cycle from any normal page and you get the full hold-to-preview overlay.
+overlay can render *on* one. Pressing the shortcut there switches straight to
+the previous tab — where one press lands anyway — and shows the panel on that
+tab instead, with the same list and highlight, so holding the modifier keeps
+cycling as usual (`continueOnTarget`). The frosted panel hides most of the page
+change behind it. If the previous tab is a browser page too, the switch still
+happens but there is no panel.
 
-Earlier versions kept a "blind" cycle on those pages so repeated taps could keep
-walking the list without UI. That state was the source of a long tail of bugs —
-once created it could survive in ways that stopped the overlay appearing on
-normal pages too — and holding nothing means there is nothing to leak into the
-next cycle.
+The hard case is a quick tap-and-release that lets go *before* the switch: the
+release lands on the browser page, where nothing can hear it, so the panel on
+the new tab waits for a keyup that already happened. The overlay is told it
+`landed` in that situation, and since its highlight is then always the tab you
+are already on, closing is always correct. It closes at the first sign the hold
+is over — a mouse move or scroll without the modifier, any typing — or after
+`LANDED_IDLE_MS` (900ms) with no further press. Another press, or pointer
+movement with the modifier still down, hands back to the ordinary keyup path.
 
-A cycle only ever exists while a panel is on screen. Its expiry never switches
-tabs: timing out means we lost track of the hold, not that you chose the
-highlighted tab.
+An earlier version of this path was removed because it could not detect that
+release at all, and an old "blind" cycle state on these pages caused a long
+tail of bugs. What changed: the overlay now records releases from page load and
+reports them back (catching a release after the switch but before the panel
+paints), it polices its own lifetime in the page rather than via service-worker
+timers, and the landed rule covers the one release no page can see.
+
+The window is claimed before the switch, and thumbnail capture re-checks for a
+running cycle on each side of the screenshot, so a capture of the new tab can
+never catch the panel mid-appearance — thumbnails are cached by URL, so one
+that did would stick.
+
+A cycle only exists while a panel is on screen or about to be. Its expiry never
+switches tabs: timing out means we lost track of the hold, not that you chose
+the highlighted tab.
 
 **Expiry is enforced by timestamp, not by the timer.** MV3 service workers are
 suspended between events and pending `setTimeout` callbacks are dropped, so a

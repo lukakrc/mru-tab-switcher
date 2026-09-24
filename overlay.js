@@ -292,6 +292,16 @@
   const UNFOCUSED_IDLE_MS = 700;
   // Absolute ceiling for a focused page, where a real release is expected.
   const MAX_PANEL_MS = 30000;
+  // Set when the panel went up on a tab we switched to from a browser page
+  // (chrome://settings and the like), which runs no content script. A release
+  // that happened there, before the switch, can never reach us — and in that
+  // state the highlight is always the tab you are already on, so closing is
+  // always the right answer. This is how long a hold with no further press is
+  // given before we conclude the release already happened. Any sign the hold
+  // continues (another press, pointer movement with the modifier down) clears
+  // it and hands back to the ordinary keyup path.
+  const LANDED_IDLE_MS = 900;
+  let landedPending = false;
   let watchdogId = null;
   let lastActivityAt = 0;
 
@@ -441,6 +451,12 @@
     }
     const idle = Date.now() - lastActivityAt;
 
+    if (landedPending && idle > LANDED_IDLE_MS) {
+      dlog('watchdog: landed and idle, closing', { idle });
+      dismiss(); // the highlight is the tab we are on; nothing to switch to
+      return;
+    }
+
     // Unfocused: the release is unobservable here, so waiting cannot resolve
     // anything. Commit rather than cancel — pressing the shortcut was a request
     // to switch, and honouring it beats discarding it. Each cycle step calls
@@ -470,6 +486,7 @@
   function teardown() {
     dlog('teardown');
     stopWatchdog();
+    landedPending = false;
     if (host) {
       host.remove();
       host = null;
@@ -531,7 +548,32 @@
   }
 
   function onKeyDown(e) {
-    if (host && e.key === 'Escape') dismiss();
+    if (!host) return;
+    if (e.key === 'Escape') {
+      dismiss();
+      return;
+    }
+    // A key pressed with no modifier down means the hold is over — the user has
+    // moved on to typing. Only meaningful while landed: otherwise the modifier's
+    // own keyup has already ended the cycle before any such key could arrive.
+    if (landedPending && !MODIFIER_KEYS.includes(e.key) && !(e.ctrlKey || e.altKey || e.metaKey)) {
+      dismiss();
+    }
+  }
+
+  // Mouse and wheel events carry the live modifier state, so while landed they
+  // settle the question the missing keyup could not — the moment the user
+  // touches the mouse or scrolls, rather than after the idle fallback.
+  function onLandedPointer(e) {
+    if (!host || !landedPending) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      // Still held, and this page is receiving events: the release will arrive
+      // as an ordinary keyup, so stop second-guessing it.
+      landedPending = false;
+      return;
+    }
+    dlog('landed: pointer shows no modifier held, closing');
+    dismiss();
   }
 
   function cardIndexFromEvent(e) {
@@ -602,8 +644,11 @@
     };
   }
 
-  function showOverlay(tabs, index, debug) {
+  function showOverlay(tabs, index, debug, landed) {
     debugMode = !!debug;
+    // Only a fresh panel can be landed; a rebuild mid-cycle (a tab closed)
+    // keeps whatever state the cycle is already in.
+    if (!host) landedPending = !!landed;
     dlog('show', { tabs: tabs.length, index, hasFocus: document.hasFocus() });
     // A 'show' can arrive while the panel is already up — a tab closing rebuilds
     // the list, and a restarted cycle re-sends it. Rebuilding then means
@@ -657,6 +702,8 @@
   document.addEventListener('mousedown', onPointerDown, true);
   window.addEventListener('blur', onWindowBlur);
   document.addEventListener('visibilitychange', onVisibilityChange);
+  document.addEventListener('mousemove', onLandedPointer, { capture: true, passive: true });
+  document.addEventListener('wheel', onLandedPointer, { capture: true, passive: true });
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Report back whether the panel actually painted. A resolved sendMessage
@@ -664,9 +711,12 @@
     // threw while building would still be reported as shown.
     try {
       if (msg.type === 'show') {
-        showOverlay(msg.tabs, msg.index, msg.debug);
+        showOverlay(msg.tabs, msg.index, msg.debug, msg.landed);
         sendResponse(panelState());
       } else if (msg.type === 'update') {
+        // Another press proves the modifier is still held, and this page has
+        // focus to hear its release.
+        landedPending = false;
         noteActivity();
         setActive(msg.index);
         sendResponse(panelState());

@@ -200,9 +200,9 @@ async function startCycle(tab) {
 
   const shown = await tryShowOverlay(tab.id, tabInfos, startIndex);
   if (!shown) {
-    // Restricted page: no overlay can ever render here, so there is nothing to
-    // cycle within. Switch once and store NOTHING.
-    await quickSwitch(target);
+    // A browser page (chrome://settings, the Web Store…): no extension can draw
+    // on it, so the panel goes up on the tab this press would land on instead.
+    await continueOnTarget(windowId, tabInfos, startIndex, startedAt);
     return;
   }
 
@@ -227,20 +227,52 @@ async function startCycle(tab) {
   });
 }
 
-// Jump to one tab and record nothing at all.
+// Switch to the target first — it is where one press lands anyway — then show
+// the panel there, with the same frozen list and highlight, so a held modifier
+// keeps cycling as it would anywhere else. The frosted panel hides most of the
+// page change behind it.
 //
-// Chrome forbids content scripts on chrome:// pages and the Web Store, so the
-// switcher UI simply cannot exist while one of them is in front. Earlier
-// versions kept a "blind" cycle here so repeated taps could keep walking the
-// list without UI. That state was the source of a long tail of bugs — once
-// created it could survive in ways that stopped the overlay appearing on normal
-// pages too, and it was never worth what it bought. Holding no state means
-// there is nothing to leak into the next cycle: the next press, from a normal
-// page, starts clean.
-async function quickSwitch(target) {
+// This path was once removed because a panel on a freshly switched-to tab
+// could never see the release: a quick tap-and-release lets go while the
+// browser page still has focus, and browser pages run no content script. Two
+// things make it safe now. The overlay records any release it sees from page
+// load, so a release after the switch but before the panel paints is caught
+// here via releasedAt. And for a release before the switch, which no page can
+// ever see, the overlay is told it `landed`: its highlight is the tab you are
+// already on, so it closes itself at the first sign the hold is over rather
+// than waiting for a keyup that already happened.
+async function continueOnTarget(windowId, tabInfos, index, startedAt) {
+  const target = tabInfos[index];
   if (!target) return;
-  log('quickSwitch (restricted page): stateless jump', { to: target.id });
+
+  // Claim the window before switching, so the activation's thumbnail capture
+  // stands down. A screenshot taken a moment later would have the panel in it,
+  // and thumbnails are cached by URL, so it would stick.
+  setCycleState(windowId, { tabInfos, index, overlayTabId: target.id });
   await activateTab(target.id);
+
+  const shown = await tryShowOverlay(target.id, tabInfos, index, { landed: true });
+  if (!shown) {
+    // The target is a browser page too. The switch stands; there is no panel.
+    log('continueOnTarget: target is restricted too, switch only', { to: target.id });
+    endCycle(windowId);
+    return;
+  }
+
+  if (shown.releasedAt && shown.releasedAt >= startedAt) {
+    // Let go after the switch but before the panel painted: one press was the
+    // whole gesture, and it has already landed.
+    log('continueOnTarget: released before paint', { releasedAt: shown.releasedAt });
+    closeCycle(windowId);
+    return;
+  }
+
+  setCycleState(windowId, {
+    tabInfos,
+    index,
+    overlayTabId: target.id,
+    focused: shown.focused !== false,
+  });
 }
 
 /* ------------------------------------------------------------------ *
