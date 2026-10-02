@@ -94,16 +94,19 @@
   // Chrome's own group palette so a badge reads as the same group you see in
   // the tab strip. Each carries its own text colour: white on yellow or orange
   // is roughly 2:1 contrast, which at 10px is closer to decoration than text.
+  // In dark mode Chrome switches its tab strip to the pale 300-weight tints, all
+  // with dark text, so `dark` follows suit — otherwise a group would be one
+  // colour in the strip and another on its card.
   const GROUP_COLORS = {
-    grey: { bg: '#5F6368', fg: '#FFFFFF' },
-    blue: { bg: '#1A73E8', fg: '#FFFFFF' },
-    red: { bg: '#D93025', fg: '#FFFFFF' },
-    yellow: { bg: '#F9AB00', fg: '#202124' },
-    green: { bg: '#1E8E3E', fg: '#FFFFFF' },
-    pink: { bg: '#D01884', fg: '#FFFFFF' },
-    purple: { bg: '#9334E6', fg: '#FFFFFF' },
-    cyan: { bg: '#007B83', fg: '#FFFFFF' },
-    orange: { bg: '#FA903E', fg: '#202124' },
+    grey: { bg: '#5F6368', fg: '#FFFFFF', dark: '#DADCE0' },
+    blue: { bg: '#1A73E8', fg: '#FFFFFF', dark: '#8AB4F8' },
+    red: { bg: '#D93025', fg: '#FFFFFF', dark: '#F28B82' },
+    yellow: { bg: '#F9AB00', fg: '#202124', dark: '#FDD663' },
+    green: { bg: '#1E8E3E', fg: '#FFFFFF', dark: '#81C995' },
+    pink: { bg: '#D01884', fg: '#FFFFFF', dark: '#FF8BCB' },
+    purple: { bg: '#9334E6', fg: '#FFFFFF', dark: '#C58AF9' },
+    cyan: { bg: '#007B83', fg: '#FFFFFF', dark: '#78D9EC' },
+    orange: { bg: '#FA903E', fg: '#202124', dark: '#FCAD70' },
   };
 
   const STYLE = `
@@ -117,13 +120,17 @@
     .panel {
       --panel-bg: rgba(255, 255, 255, 0.86);
       --panel-edge: rgba(0, 0, 0, 0.06);
-      --card-active: rgba(0, 0, 0, 0.14);
-      --card-active-ring: rgba(0, 0, 0, 0.32);
+      /* The ring does the work, so the fill stays faint. A heavier grey fill
+         under a mid-grey ring read as a pressed button rather than a
+         selection, and muddied the white page thumbnails it framed. */
+      --card-active: rgba(0, 0, 0, 0.08);
+      --card-active-ring: rgba(0, 0, 0, 0.42);
       --title: #1a1a1a;
       --title-active: #1a1a1a;
       --thumb-bg: #f4f5f7;
       --thumb-ring: rgba(0, 0, 0, 0.08);
       --favicon-blank: rgba(0, 0, 0, 0.12);
+      --scrollbar: rgba(0, 0, 0, 0.25);
 
       position: fixed;
       top: 50%;
@@ -133,11 +140,23 @@
       gap: ${GRID_GAP_PX}px;
       padding: ${PANEL_PADDING_PX}px;
       /* A window too short for every row scrolls inside the panel rather than
-         pushing cards off-screen; setActive keeps the selection in view. */
+         pushing cards off-screen; setActive keeps the selection in view.
+         border-box so the cap includes the padding — content-box let the
+         panel run 20px past it and sit closer to the window edge than
+         VIEWPORT_MARGIN_PX. */
+      box-sizing: border-box;
       max-height: calc(100vh - ${2 * VIEWPORT_MARGIN_PX}px);
       overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
+      /* scrollIntoView honours this, so a card scrolled into view keeps the
+         panel's padding around it instead of landing flush against the
+         rounded edge, where the corners clip it. */
+      scroll-padding: ${PANEL_PADDING_PX}px;
+      /* Where scrollbars are always drawn (Windows, or macOS with a mouse),
+         the default grey trough cut a hard stripe through the glass. */
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar) transparent;
       background: var(--panel-bg);
       /* Concentric with the cards: outer radius = card radius + panel padding. */
       border-radius: 22px;
@@ -148,6 +167,9 @@
         0 24px 60px rgba(0, 0, 0, 0.35),
         0 2px 8px rgba(0, 0, 0, 0.1);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      /* Without this macOS thickens text, most visibly the light titles on
+         the dark glass, where 12px type starts to look bold. */
+      -webkit-font-smoothing: antialiased;
       backdrop-filter: blur(24px) saturate(1.6);
       -webkit-backdrop-filter: blur(24px) saturate(1.6);
       pointer-events: auto;
@@ -156,20 +178,12 @@
       user-select: none;
       -webkit-user-select: none;
     }
-    /* Fast and front-loaded, so it softens the arrival without reading as
-       delay — over half opaque one frame (~16ms) after it appears. Only on
-       first appearance: a rebuild mid-cycle (a tab closed) must not blink
-       the panel. */
-    @keyframes panel-enter {
-      from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
-      to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-    }
-    .panel--enter {
-      animation: panel-enter 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .panel--enter { animation: none; }
-    }
+    /* No entrance animation, deliberately. This is a keyboard shortcut used
+       dozens of times an hour, and any motion between the press and the
+       panel reads as the panel lagging behind the hand — the macOS app
+       switcher and Raycast don't animate either. The pause before it appears
+       (REVEAL_DELAY_MS) is a different thing: nothing is drawn during it, so
+       there is nothing to watch move. */
     @media (prefers-color-scheme: dark) {
       .panel {
         --panel-bg: rgba(32, 33, 36, 0.88);
@@ -188,6 +202,7 @@
         --thumb-bg: #2a2b2e;
         --thumb-ring: rgba(255, 255, 255, 0.12);
         --favicon-blank: rgba(255, 255, 255, 0.20);
+        --scrollbar: rgba(255, 255, 255, 0.25);
       }
     }
     /* macOS "Reduce transparency". The frosted look is the first thing that
@@ -227,6 +242,14 @@
     .card--active .title {
       color: var(--title-active);
     }
+    /* Windows High Contrast drops box-shadows, which is all the selection is
+       drawn with; an outline in the system highlight colour survives it. */
+    @media (forced-colors: active) {
+      .card--active {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+      }
+    }
     .thumb-wrap {
       position: relative;
       width: 100%;
@@ -234,7 +257,18 @@
       border-radius: 6px;
       overflow: hidden;
       background: var(--thumb-bg);
-      box-shadow: 0 0 0 1px var(--thumb-ring);
+    }
+    /* The edge is drawn over the screenshot rather than around it, so it
+       reads as the image's own border: a white page keeps a defined edge
+       against the white panel, and a dark one against the dark panel,
+       without the 1px of grey a ring outside the image adds to every card. */
+    .thumb-wrap::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow: inset 0 0 0 1px var(--thumb-ring);
+      pointer-events: none;
     }
     .thumb {
       width: 100%;
@@ -261,10 +295,17 @@
       font-size: 10px;
       font-weight: 600;
       line-height: 1.4;
-      color: #fff;
+      background: var(--group-bg);
+      color: var(--group-fg);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    @media (prefers-color-scheme: dark) {
+      .group-badge {
+        background: var(--group-bg-dark);
+        color: #202124;
+      }
     }
     .thumb-fallback-icon {
       width: 32px;
@@ -289,6 +330,9 @@
     }
     .title {
       font-size: 12px;
+      /* Matches the favicon beside it, so the row is exactly 16px tall in
+         every font rather than whatever "normal" resolves to. */
+      line-height: 16px;
       font-weight: 400;
       color: var(--title);
       white-space: nowrap;
@@ -335,6 +379,17 @@
   // it and hands back to the ordinary keyup path.
   const LANDED_IDLE_MS = 900;
   let landedPending = false;
+  // A quick tap is a whole gesture on its own: press, let go, and you are on
+  // the previous tab. Drawing the panel for the few dozen milliseconds that
+  // takes only flashes it, on the most common use of the shortcut there is.
+  // So the panel is built at once — it has to exist to hear the release — but
+  // stays hidden until the hold has outlasted this, the way the macOS app
+  // switcher waits before it appears. A second press shows it immediately:
+  // cycling has plainly begun. A landed panel waits for that kind of proof
+  // outright, since its release may already have happened where no page could
+  // see it; showing it anyway only put up a panel that then closed itself.
+  const REVEAL_DELAY_MS = 120;
+  let revealTimer = null;
   let watchdogId = null;
   let lastActivityAt = 0;
 
@@ -372,7 +427,13 @@
     const wrap = div('thumb-wrap');
 
     if (tab.thumbnail) {
-      wrap.appendChild(img('thumb', tab.thumbnail));
+      const thumb = img('thumb', tab.thumbnail);
+      // Decode now, while the panel is still hidden for REVEAL_DELAY_MS. An
+      // image in a hidden subtree is otherwise left undecoded until it first
+      // paints, so the panel would appear with empty plates that fill in a
+      // frame or two later.
+      thumb.decode().catch(() => {});
+      wrap.appendChild(thumb);
     } else {
       // No screenshot yet (tab not visited since the worker started, or it's a
       // page we can't capture) — show the favicon centered on a blank plate.
@@ -389,8 +450,10 @@
       const badge = div('group-badge');
       badge.textContent = tab.group.title;
       const colors = GROUP_COLORS[tab.group.color] || GROUP_COLORS.grey;
-      badge.style.background = colors.bg;
-      badge.style.color = colors.fg;
+      // Both palettes ride along; the stylesheet picks one by colour scheme.
+      badge.style.setProperty('--group-bg', colors.bg);
+      badge.style.setProperty('--group-fg', colors.fg);
+      badge.style.setProperty('--group-bg-dark', colors.dark);
       wrap.appendChild(badge);
     }
 
@@ -427,14 +490,14 @@
   }
 
   // Full rebuild — only on a new cycle or when the tab list itself changes.
-  function buildPanel(animate) {
+  function buildPanel() {
     shadow.replaceChildren();
 
     const style = document.createElement('style');
     style.textContent = STYLE;
     shadow.appendChild(style);
 
-    const panel = div(animate ? 'panel panel--enter' : 'panel');
+    const panel = div('panel');
     const { columns, cardWidth } = gridFor(tabsData.length);
     panel.style.gridTemplateColumns = `repeat(${columns}, ${cardWidth}px)`;
 
@@ -461,6 +524,12 @@
     if (active && panelEl && panelEl.scrollHeight > panelEl.clientHeight) {
       active.scrollIntoView({ block: 'nearest' });
     }
+  }
+
+  function reveal() {
+    clearTimeout(revealTimer);
+    revealTimer = null;
+    if (host) host.style.visibility = 'visible';
   }
 
   function resetHoverAnchor() {
@@ -533,6 +602,8 @@
   function teardown() {
     dlog('teardown');
     stopWatchdog();
+    clearTimeout(revealTimer);
+    revealTimer = null;
     landedPending = false;
     if (host) {
       host.remove();
@@ -617,6 +688,7 @@
       // Still held, and this page is receiving events: the release will arrive
       // as an ordinary keyup, so stop second-guessing it.
       landedPending = false;
+      reveal();
       return;
     }
     dlog('landed: pointer shows no modifier held, closing');
@@ -722,8 +794,11 @@
       host.id = 'mru-tab-switcher-host';
       // pointer-events: none so the full-viewport host never blocks the page;
       // the panel itself re-enables them so cards stay hoverable and clickable.
+      // Hidden until reveal() — see REVEAL_DELAY_MS. visibility rather than
+      // opacity, so a click meanwhile falls through to the page and ends the
+      // cycle like any other click outside the panel.
       host.style.cssText =
-        'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none;';
+        'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none; visibility: hidden;';
       document.documentElement.appendChild(host);
       // Closed, so nothing else on the page can reach in. Dark Reader walks
       // every *open* shadow root it can find via element.shadowRoot and injects
@@ -740,7 +815,8 @@
       shadow.addEventListener('contextmenu', onCardContextMenu);
     }
 
-    buildPanel(fresh);
+    buildPanel();
+    if (fresh && !landedPending) revealTimer = setTimeout(reveal, REVEAL_DELAY_MS);
   }
 
   // Registered once at page load and never removed. The keyup listener has to
@@ -774,6 +850,7 @@
           landedPending = false;
           noteActivity();
           setActive(msg.index);
+          reveal();
         }
         sendResponse(panelState());
       } else if (msg.type === 'teardown') {

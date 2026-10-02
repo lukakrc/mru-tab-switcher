@@ -101,10 +101,26 @@ then-two-rows shape through moderately narrow windows; only below that does a
 column go and the tabs flow onto another row. A window too short for every row
 scrolls inside the panel, and the selection is kept in view.
 
-The panel eases in over 140ms on first appearance — front-loaded, so it is
-over half opaque one frame after it appears and never reads as delay. A rebuild
-mid-cycle (a tab closing) does not replay it. macOS "Reduce motion" drops the
-animation, and "Reduce transparency" swaps the frosted panel for an opaque one.
+### Appearing
+
+A quick tap — press, let go — is a complete gesture that lands on the previous
+tab, and it is the most common use of the shortcut by far. Drawing the panel for
+the few dozen milliseconds that takes only flashes it. So the panel is built the
+moment the press arrives (it has to exist to hear the release) but stays hidden
+for `REVEAL_DELAY_MS` (120ms), and is shown only if the hold outlasts that, much
+as the macOS app switcher waits before appearing. A second press shows it
+immediately, since cycling has plainly begun. Thumbnails are decoded during the
+wait, so the panel never appears with empty plates that fill in a frame later.
+
+It then appears without an entrance animation. It is a keyboard shortcut used
+dozens of times an hour, and any motion between the press and the panel reads
+as the panel trailing the hand. Closing is instant for the same reason, and
+moving the highlight never transitions: at key-repeat speed a fade leaves
+several cards half-lit at once. "Reduce transparency" swaps the frosted panel
+for an opaque one.
+
+In Windows High Contrast mode, which removes box-shadows, the selection is drawn
+as an outline in the system highlight colour instead.
 
 ### Pointer vs keyboard selection
 
@@ -170,9 +186,9 @@ The cycle is claimed before the panel is shown, not after it paints, so a
 release reported while the panel is still going up (by a subframe, say) finds a
 cycle to close instead of being dropped.
 
-Everything before the overlay's first paint is on the critical path: if it
-appears later than the release of a quick tap, the panel just flashes and
-vanishes. So `overlay.js` is declared as a content script (already resident, one
+Everything before the overlay exists is on the critical path: it is what hears
+the release, and the reveal delay for a held press counts from its arrival. So
+`overlay.js` is declared as a content script (already resident, one
 message to paint, with `executeScript` only as a fallback for tabs that predate
 the extension loading), and the tab list is gathered with a single
 `chrome.tabs.query` rather than a `chrome.tabs.get` per entry. It runs from
@@ -199,9 +215,8 @@ Chrome forbids content scripts on `chrome://` pages and the Web Store, so no
 overlay can render *on* one. Pressing the shortcut there switches straight to
 the previous tab — where one press lands anyway — and shows the panel on that
 tab instead, with the same list and highlight, so holding the modifier keeps
-cycling as usual (`continueOnTarget`). The frosted panel hides most of the page
-change behind it. If the previous tab is a browser page too, the switch still
-happens but there is no panel.
+cycling as usual (`continueOnTarget`). If the previous tab is a browser page
+too, the switch still happens but there is no panel.
 
 The hard case is a quick tap-and-release that lets go *before* the switch: the
 release lands on the browser page, where nothing can hear it, so the panel on
@@ -211,6 +226,11 @@ are already on, closing is always correct. It closes at the first sign the hold
 is over — a mouse move or scroll without the modifier, any typing — or after
 `LANDED_IDLE_MS` (900ms) with no further press. Another press, or pointer
 movement with the modifier still down, hands back to the ordinary keyup path.
+
+A landed panel stays hidden until one of those proves the hold is still on,
+rather than after the usual reveal delay. Shown on the delay alone, a quick tap
+from a browser page left a panel on screen for most of a second that then
+closed by itself, having offered nothing.
 
 An earlier version of this path was removed because it could not detect that
 release at all, and an old "blind" cycle state on these pages caused a long
@@ -244,7 +264,9 @@ thumbnail, tinted with that group's own colour (`chrome.tabGroups` reports a
 colour *name*, so `GROUP_COLORS` in `overlay.js` maps those to Chrome's
 palette). Unnamed groups get no badge — a nameless pill communicates nothing.
 Each palette entry carries its own text colour: yellow and orange take dark
-text, since white on either is roughly 2:1 contrast. Groups are fetched with a
+text, since white on either is roughly 2:1 contrast. In dark mode the badges
+switch to the pale tints Chrome's own dark tab strip uses, all with dark text, so
+a group stays the same colour in both places. Groups are fetched with a
 single `chrome.tabGroups.query` alongside the tab query, in the same parallel
 step, since this is on the pre-paint critical path.
 

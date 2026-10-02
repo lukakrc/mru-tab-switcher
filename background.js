@@ -248,10 +248,11 @@ async function startCycle(tab) {
   });
 }
 
-// Switch to the target first — it is where one press lands anyway — then show
-// the panel there, with the same frozen list and highlight, so a held modifier
-// keeps cycling as it would anywhere else. The frosted panel hides most of the
-// page change behind it.
+// Switch to the target first — it is where one press lands anyway — then put
+// the panel up there, with the same frozen list and highlight, so a held
+// modifier keeps cycling as it would anywhere else. It stays hidden until the
+// hold is proven (another press, or the pointer moving with the modifier down);
+// see REVEAL_DELAY_MS in overlay.js.
 //
 // This path was once removed because a panel on a freshly switched-to tab
 // could never see the release: a quick tap-and-release lets go while the
