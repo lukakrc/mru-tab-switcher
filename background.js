@@ -216,38 +216,16 @@ async function startCycle(tab) {
   // once the reply came in. Claiming early also stands thumbnail capture down
   // while the panel is appearing.
   const claim = setCycleState(windowId, { tabInfos, index: startIndex, overlayTabId: tab.id });
-  const shown = await tryShowOverlay(tab.id, tabInfos, startIndex, { zoom });
-  // Ended while the panel was going up; whoever ended it has already switched
-  // or cancelled, and taken the panel down.
-  if (getCycle(windowId) !== claim) return;
+  const outcome = await presentCycle(windowId, claim, { zoom }, startedAt);
 
-  if (!shown) {
+  if (outcome === 'unavailable') {
     // A browser page (chrome://settings, the Web Store…): no extension can draw
     // on it, so the panel goes up on the tab this press would land on instead.
     await continueOnTarget(windowId, tabInfos, startIndex, startedAt);
-    return;
+  } else if (outcome === 'released') {
+    // One press was the whole gesture: make the switch it asked for.
+    activateTab(target.id);
   }
-
-  // The release already happened — the panel went up after the hold ended, so
-  // nothing further will arrive to close it. Finish the switch now instead of
-  // leaving it on screen waiting for an event that is already in the past.
-  if (holdEnded(shown, startedAt)) {
-    log('release predates paint; committing immediately', {
-      startedAt,
-      released: shown.released,
-      releasedAt: shown.releasedAt,
-    });
-    closeCycle(windowId);
-    if (target) activateTab(target.id);
-    return;
-  }
-
-  setCycleState(windowId, {
-    tabInfos,
-    index: startIndex,
-    overlayTabId: tab.id,
-    focused: shown.focused !== false,
-  });
 }
 
 // Switch to the target first — it is where one press lands anyway — then put
@@ -275,32 +253,45 @@ async function continueOnTarget(windowId, tabInfos, index, startedAt) {
   const claim = setCycleState(windowId, { tabInfos, index, overlayTabId: target.id });
   const [, zoom] = await Promise.all([activateTab(target.id), zoomOf(target.id)]);
 
-  const shown = await tryShowOverlay(target.id, tabInfos, index, { landed: true, zoom });
-  if (getCycle(windowId) !== claim) return; // ended while the panel was going up
-  if (!shown) {
+  // 'released' needs nothing further here: the switch has already happened.
+  const outcome = await presentCycle(windowId, claim, { landed: true, zoom }, startedAt);
+  if (outcome === 'unavailable') {
     // The target is a browser page too. The switch stands; there is no panel.
     log('continueOnTarget: target is restricted too, switch only', { to: target.id });
     endCycle(windowId);
-    return;
   }
+}
 
+// Puts the panel up for a cycle that has just been claimed, and settles what
+// its reply means. Both ways of starting a cycle share this; they differ only
+// in what they do with the outcome:
+//   'holding'      the panel is up and the hold goes on; the cycle is live
+//   'released'     the hold ended before the panel painted; cycle closed
+//   'unavailable'  nothing can draw on that tab (a browser page)
+//   'superseded'   the cycle ended while the panel was going up, and whoever
+//                  ended it has already switched or cancelled
+async function presentCycle(windowId, claim, extra, startedAt) {
+  const { overlayTabId, tabInfos, index } = claim;
+  const shown = await tryShowOverlay(overlayTabId, tabInfos, index, extra);
+  if (getCycle(windowId) !== claim) return 'superseded';
+  if (!shown) return 'unavailable';
+
+  // The panel went up after the hold ended, so nothing further will arrive to
+  // close it. Finish now rather than leave it on screen waiting for an event
+  // that is already in the past.
   if (holdEnded(shown, startedAt)) {
-    // Let go after the switch but before the panel painted: one press was the
-    // whole gesture, and it has already landed.
-    log('continueOnTarget: released before paint', {
+    log('release predates paint', {
+      tabId: overlayTabId,
+      startedAt,
       released: shown.released,
       releasedAt: shown.releasedAt,
     });
     closeCycle(windowId);
-    return;
+    return 'released';
   }
 
-  setCycleState(windowId, {
-    tabInfos,
-    index,
-    overlayTabId: target.id,
-    focused: shown.focused !== false,
-  });
+  setCycleState(windowId, { ...claim, focused: shown.focused !== false });
+  return 'holding';
 }
 
 /* ------------------------------------------------------------------ *

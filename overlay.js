@@ -22,10 +22,16 @@
     if (debugMode) console.log('[mru overlay]', window.top === window ? 'top' : 'frame', ...args);
   }
 
+  // Whether any key that can hold a cycle open is down, per the event's own
+  // modifier flags — which every key, mouse and wheel event carries live.
+  function holdingModifier(e) {
+    return e.ctrlKey || e.altKey || e.metaKey;
+  }
+
   function endsHold(e) {
     // Another modifier still down (e.g. Control released while Shift is held
     // for a reverse-cycle binding) means the hold isn't over yet.
-    return MODIFIER_KEYS.includes(e.key) && !(e.ctrlKey || e.altKey || e.metaKey);
+    return MODIFIER_KEYS.includes(e.key) && !holdingModifier(e);
   }
 
   // Whether a cycle modifier is down right now, as far as this document can
@@ -43,7 +49,7 @@
   // waiting for a keyup that had already happened.
   let modifierDown = null;
   function trackModifiers(e) {
-    modifierDown = e.ctrlKey || e.altKey || e.metaKey;
+    modifierDown = holdingModifier(e);
   }
   // Window capture from document_start, so this runs ahead of any listener the
   // page adds and a page swallowing key events can't blind it.
@@ -693,7 +699,7 @@
     // A key pressed with no modifier down means the hold is over — the user has
     // moved on to typing. Only meaningful while landed: otherwise the modifier's
     // own keyup has already ended the cycle before any such key could arrive.
-    if (landedPending && !MODIFIER_KEYS.includes(e.key) && !(e.ctrlKey || e.altKey || e.metaKey)) {
+    if (landedPending && !MODIFIER_KEYS.includes(e.key) && !holdingModifier(e)) {
       dismiss();
     }
   }
@@ -703,7 +709,7 @@
   // touches the mouse or scrolls, rather than after the idle fallback.
   function onLandedPointer(e) {
     if (!host || !landedPending) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) {
+    if (holdingModifier(e)) {
       // Still held, and this page is receiving events: the release will arrive
       // as an ordinary keyup, so stop second-guessing it.
       landedPending = false;
@@ -814,34 +820,38 @@
     }
 
     const fresh = !host;
-    if (fresh) {
-      host = document.createElement('div');
-      host.id = 'mru-tab-switcher-host';
-      // pointer-events: none so the full-viewport host never blocks the page;
-      // the panel itself re-enables them so cards stay hoverable and clickable.
-      // Hidden until reveal() — see REVEAL_DELAY_MS. visibility rather than
-      // opacity, so a click meanwhile falls through to the page and ends the
-      // cycle like any other click outside the panel.
-      host.style.cssText =
-        'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none; visibility: hidden;';
-      document.documentElement.appendChild(host);
-      // Closed, so nothing else on the page can reach in. Dark Reader walks
-      // every *open* shadow root it can find via element.shadowRoot and injects
-      // its own stylesheets, rewriting colours — it turned the panel dark and
-      // the selection near-black on top of it, invisible. It has no per-element
-      // opt-out (only a page-wide lock we must never set), but a closed root
-      // makes element.shadowRoot return null, and we never need it: `shadow`
-      // is our handle. This also keeps out any other extension or page script
-      // that restyles what it can see.
-      shadow = host.attachShadow({ mode: 'closed' });
-      // Shadow-scoped listeners die with the shadow root, so these belong here.
-      shadow.addEventListener('mousemove', onCardHover);
-      shadow.addEventListener('click', onCardClick);
-      shadow.addEventListener('contextmenu', onCardContextMenu);
-    }
+    if (fresh) createHost();
 
     buildPanel();
     if (fresh && !landedPending) revealTimer = setTimeout(reveal, REVEAL_DELAY_MS);
+  }
+
+  // The layer the panel lives in, covering the viewport above everything else.
+  // Rebuilds reuse it; only teardown removes it.
+  function createHost() {
+    host = document.createElement('div');
+    host.id = 'mru-tab-switcher-host';
+    // pointer-events: none so the full-viewport host never blocks the page;
+    // the panel itself re-enables them so cards stay hoverable and clickable.
+    // Hidden until reveal() — see REVEAL_DELAY_MS. visibility rather than
+    // opacity, so a click meanwhile falls through to the page and ends the
+    // cycle like any other click outside the panel.
+    host.style.cssText =
+      'all: initial; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2147483647; pointer-events: none; visibility: hidden;';
+    document.documentElement.appendChild(host);
+    // Closed, so nothing else on the page can reach in. Dark Reader walks
+    // every *open* shadow root it can find via element.shadowRoot and injects
+    // its own stylesheets, rewriting colours — it turned the panel dark and
+    // the selection near-black on top of it, invisible. It has no per-element
+    // opt-out (only a page-wide lock we must never set), but a closed root
+    // makes element.shadowRoot return null, and we never need it: `shadow`
+    // is our handle. This also keeps out any other extension or page script
+    // that restyles what it can see.
+    shadow = host.attachShadow({ mode: 'closed' });
+    // Shadow-scoped listeners die with the shadow root, so these belong here.
+    shadow.addEventListener('mousemove', onCardHover);
+    shadow.addEventListener('click', onCardClick);
+    shadow.addEventListener('contextmenu', onCardContextMenu);
   }
 
   // Registered once at page load and never removed. The keyup listener has to
