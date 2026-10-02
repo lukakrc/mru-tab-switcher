@@ -28,6 +28,31 @@
     return MODIFIER_KEYS.includes(e.key) && !(e.ctrlKey || e.altKey || e.metaKey);
   }
 
+  // Whether a cycle modifier is down right now, as far as this document can
+  // tell: true or false once a key event has said so, null when it can't know.
+  // Window blur resets it — focus moving to another frame, the omnibox, another
+  // tab or another app means key events stop arriving here, so the last one
+  // seen says nothing about the present.
+  //
+  // This is what catches a quick tap whose release beats the panel: both the
+  // keydown and the keyup land here before 'show' does, so false on arrival
+  // means the hold is already over. Comparing a release timestamp with the
+  // service worker's clock could not do this reliably. The worker only learns
+  // of the press once it has woken and restored its state, so a release inside
+  // that gap looked older than the press, and the panel then sat on screen
+  // waiting for a keyup that had already happened.
+  let modifierDown = null;
+  function trackModifiers(e) {
+    modifierDown = e.ctrlKey || e.altKey || e.metaKey;
+  }
+  // Window capture from document_start, so this runs ahead of any listener the
+  // page adds and a page swallowing key events can't blind it.
+  window.addEventListener('keydown', trackModifiers, true);
+  window.addEventListener('keyup', trackModifiers, true);
+  window.addEventListener('blur', () => {
+    modifierDown = null;
+  });
+
   // Sub-frames draw nothing. They run at all because keyboard events go to the
   // frame that has focus, so whenever focus sits inside an iframe the top
   // document never sees the release and the panel would hang on screen until
@@ -36,8 +61,16 @@
     let cycleActive = false;
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg.type === 'show') {
-        cycleActive = true;
         debugMode = !!msg.debug;
+        // With focus in this frame the top frame hears nothing, so a release
+        // that beat 'show' here is one only this frame knows about.
+        if (modifierDown === false) {
+          dlog('show: released before the panel, forwarding');
+          cycleActive = false;
+          chrome.runtime.sendMessage({ type: 'confirm-switch' });
+        } else {
+          cycleActive = true;
+        }
       }
       else if (msg.type === 'teardown') cycleActive = false;
       // Deliberately never calls sendResponse — the top frame owns the reply
@@ -444,6 +477,20 @@
     if (watchdogId === null) watchdogId = setInterval(checkWatchdog, WATCHDOG_TICK_MS);
   }
 
+  // Whether a release can reach this page at all. document.hasFocus() says yes
+  // whenever focus is anywhere inside it, child frames included, but some of
+  // those can never run a content script to forward the keyup: a PDF, whose
+  // viewer lives inside an <embed>, or another extension's iframe. From here
+  // they are as deaf as the omnibox, and treating them as focused meant waiting
+  // out MAX_PANEL_MS for a keyup that could never arrive.
+  function canHearRelease() {
+    if (!document.hasFocus()) return false;
+    const el = document.activeElement;
+    if (!el) return true;
+    if (el.tagName === 'EMBED' || el.tagName === 'OBJECT') return false;
+    return !(el.tagName === 'IFRAME' && el.src.startsWith('chrome-extension:'));
+  }
+
   function checkWatchdog() {
     if (!host) {
       stopWatchdog();
@@ -461,7 +508,7 @@
     // anything. Commit rather than cancel — pressing the shortcut was a request
     // to switch, and honouring it beats discarding it. Each cycle step calls
     // noteActivity, so this only fires on a genuine pause.
-    if (!document.hasFocus() && idle > UNFOCUSED_IDLE_MS) {
+    if (!canHearRelease() && idle > UNFOCUSED_IDLE_MS) {
       dlog('watchdog: unfocused and idle, committing', { idle });
       commit(currentIndex);
       return;
@@ -633,14 +680,18 @@
   }
 
   // What every reply to the background carries. tryShowOverlay inspects it to
-  // decide whether the panel really painted, and startCycle compares releasedAt
-  // against its own start time to spot a hold that ended before we got here.
+  // decide whether the panel really painted, and startCycle reads released and
+  // releasedAt to spot a hold that ended before we got here.
   function panelState() {
     return {
       ok: true,
       painted: !!host,
-      focused: document.hasFocus(),
+      // Whether a keyup can reach us; the background expires the cycle sooner
+      // when it can't.
+      focused: canHearRelease(),
       releasedAt: lastReleaseAt,
+      // The modifier is already up, so no keyup is coming to close the panel.
+      released: modifierDown === false,
     };
   }
 
@@ -714,11 +765,16 @@
         showOverlay(msg.tabs, msg.index, msg.debug, msg.landed);
         sendResponse(panelState());
       } else if (msg.type === 'update') {
-        // Another press proves the modifier is still held, and this page has
-        // focus to hear its release.
-        landedPending = false;
-        noteActivity();
-        setActive(msg.index);
+        // No panel means the page navigated since the cycle began, or the panel
+        // already came down. painted: false in the reply tells the background to
+        // start over rather than advance a highlight nobody can see.
+        if (host) {
+          // Another press proves the modifier is still held, and this page has
+          // focus to hear its release.
+          landedPending = false;
+          noteActivity();
+          setActive(msg.index);
+        }
         sendResponse(panelState());
       } else if (msg.type === 'teardown') {
         teardown();

@@ -165,12 +165,21 @@ async function buildTabInfos(windowId, ids) {
   return { tabInfos, windowTabs: byId.size };
 }
 
+// Whether the hold was over before the panel painted, so no keyup is coming to
+// close it. `released` is the page's own record of the modifier being up, which
+// holds however long the worker took to wake. releasedAt still matters for a
+// release followed by a fresh press before the panel arrived: the first tap was
+// a whole gesture of its own.
+function holdEnded(shown, startedAt) {
+  return shown.released === true || shown.releasedAt >= startedAt;
+}
+
 async function startCycle(tab) {
   const windowId = tab.windowId;
-  // Stamped before any await so it predates every hop between the keypress and
-  // the panel appearing. The overlay reports when it last saw a modifier
-  // release; if that is newer than this, the user let go while we were still
-  // getting the panel up and there is no hold left to wait on.
+  // Stamped before any await, but it still postdates the keypress by however
+  // long the worker took to wake and reach this point, so a release newer than
+  // this is proof the hold ended while the panel was going up and an older one
+  // proves nothing. holdEnded leans on the page's own modifier state for that.
   const startedAt = Date.now();
   const ids = mruIds(windowId);
 
@@ -198,7 +207,18 @@ async function startCycle(tab) {
   const startIndex = 1; // previously active tab
   const target = tabInfos[startIndex];
 
+  // Claimed before the panel goes up rather than after it paints. A frame can
+  // report the release while tryShowOverlay is still waiting on the top frame's
+  // reply — a subframe holding focus gets 'show' at the same moment — and a
+  // confirm-switch that found no cycle was dropped, leaving the panel on screen
+  // once the reply came in. Claiming early also stands thumbnail capture down
+  // while the panel is appearing.
+  const claim = setCycleState(windowId, { tabInfos, index: startIndex, overlayTabId: tab.id });
   const shown = await tryShowOverlay(tab.id, tabInfos, startIndex);
+  // Ended while the panel was going up; whoever ended it has already switched
+  // or cancelled, and taken the panel down.
+  if (getCycle(windowId) !== claim) return;
+
   if (!shown) {
     // A browser page (chrome://settings, the Web Store…): no extension can draw
     // on it, so the panel goes up on the tab this press would land on instead.
@@ -209,12 +229,13 @@ async function startCycle(tab) {
   // The release already happened — the panel went up after the hold ended, so
   // nothing further will arrive to close it. Finish the switch now instead of
   // leaving it on screen waiting for an event that is already in the past.
-  if (shown.releasedAt && shown.releasedAt >= startedAt) {
+  if (holdEnded(shown, startedAt)) {
     log('release predates paint; committing immediately', {
       startedAt,
+      released: shown.released,
       releasedAt: shown.releasedAt,
     });
-    chrome.tabs.sendMessage(tab.id, { type: 'teardown' }).catch(() => {});
+    closeCycle(windowId);
     if (target) activateTab(target.id);
     return;
   }
@@ -235,9 +256,9 @@ async function startCycle(tab) {
 // This path was once removed because a panel on a freshly switched-to tab
 // could never see the release: a quick tap-and-release lets go while the
 // browser page still has focus, and browser pages run no content script. Two
-// things make it safe now. The overlay records any release it sees from page
-// load, so a release after the switch but before the panel paints is caught
-// here via releasedAt. And for a release before the switch, which no page can
+// things make it safe now. The overlay tracks the modifier from page load, so a
+// release after the switch but before the panel paints is caught here via
+// holdEnded. And for a release before the switch, which no page can
 // ever see, the overlay is told it `landed`: its highlight is the tab you are
 // already on, so it closes itself at the first sign the hold is over rather
 // than waiting for a keyup that already happened.
@@ -248,10 +269,11 @@ async function continueOnTarget(windowId, tabInfos, index, startedAt) {
   // Claim the window before switching, so the activation's thumbnail capture
   // stands down. A screenshot taken a moment later would have the panel in it,
   // and thumbnails are cached by URL, so it would stick.
-  setCycleState(windowId, { tabInfos, index, overlayTabId: target.id });
+  const claim = setCycleState(windowId, { tabInfos, index, overlayTabId: target.id });
   await activateTab(target.id);
 
   const shown = await tryShowOverlay(target.id, tabInfos, index, { landed: true });
+  if (getCycle(windowId) !== claim) return; // ended while the panel was going up
   if (!shown) {
     // The target is a browser page too. The switch stands; there is no panel.
     log('continueOnTarget: target is restricted too, switch only', { to: target.id });
@@ -259,10 +281,13 @@ async function continueOnTarget(windowId, tabInfos, index, startedAt) {
     return;
   }
 
-  if (shown.releasedAt && shown.releasedAt >= startedAt) {
+  if (holdEnded(shown, startedAt)) {
     // Let go after the switch but before the panel painted: one press was the
     // whole gesture, and it has already landed.
-    log('continueOnTarget: released before paint', { releasedAt: shown.releasedAt });
+    log('continueOnTarget: released before paint', {
+      released: shown.released,
+      releasedAt: shown.releasedAt,
+    });
     closeCycle(windowId);
     return;
   }
@@ -338,10 +363,13 @@ chrome.commands.onCommand.addListener((command, tab) => {
     }
 
     // A failed advance means the overlay is gone (navigated away, crashed) —
-    // drop the stale cycle and start over from the current MRU order.
+    // drop the stale cycle and start over from the current MRU order. Unless
+    // the cycle ended while we were asking: a release that raced this press has
+    // already switched tabs, and starting over would put a panel on the tab
+    // being left.
     if (await advanceCycle(windowId, state)) {
       armExpiry(windowId);
-    } else {
+    } else if (getCycle(windowId) === state) {
       endCycle(windowId);
       await startCycle(tab);
     }

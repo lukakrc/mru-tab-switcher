@@ -141,7 +141,10 @@ interval **in the page**, not a timer in the service worker: MV3 suspends the
 worker between events and drops pending `setTimeout`s, which is why a missed
 release used to leave the panel up indefinitely.
 
-Each tick re-checks `document.hasFocus()`. Unfocused and idle past
+Each tick re-checks whether a release can reach the page at all:
+`document.hasFocus()`, except that focus inside a PDF (Chrome's viewer lives in
+an `<embed>`) or another extension's iframe counts as unfocused, since no
+content script can listen there. Unfocused and idle past
 `UNFOCUSED_IDLE_MS` (700ms) it commits — there is no release to wait for, and
 pressing the shortcut was a request to switch, so honouring it beats discarding
 it. That figure is the visible hang in this case, so it is kept only as long as
@@ -149,19 +152,33 @@ a comfortable tap cadence needs. Focused and idle past `MAX_PANEL_MS` (30s) it
 cancels instead: at that distance the highlighted tab is no longer a safe guess
 at intent. Window blur, tab hide, and a mousedown outside the panel also cancel.
 
-The overlay additionally records when it last saw a release, from page load
-rather than from when the panel paints, and reports it back. A cold service
-worker can take long enough to restore its caches that a quick tap-and-release
-finishes before the panel exists; the timestamp survives even though the event
-does not, and `startCycle` commits immediately when it sees one newer than the
-keypress.
+A quick tap is often over before the panel exists: a cold service worker has to
+boot and restore its caches before it even hears about the press. So every
+frame tracks whether the modifier is currently up, from every key event it has
+seen since page load, and forgets the moment its window blurs, because from
+then on key events go elsewhere. The panel's reply carries that, and
+`startCycle` commits immediately when the modifier is already up. A subframe
+holding focus runs the same check when `show` reaches it and forwards the
+release. An earlier version compared a release timestamp with the time
+`startCycle` began instead, which missed exactly the cold-start case: the
+worker's clock only starts once it is awake, so a release during the wake looked
+older than the press and the panel sat out its 30s ceiling. The timestamp is
+still compared, for a release followed by a fresh press before the panel
+arrived.
+
+The cycle is claimed before the panel is shown, not after it paints, so a
+release reported while the panel is still going up (by a subframe, say) finds a
+cycle to close instead of being dropped.
 
 Everything before the overlay's first paint is on the critical path: if it
 appears later than the release of a quick tap, the panel just flashes and
 vanishes. So `overlay.js` is declared as a content script (already resident, one
 message to paint, with `executeScript` only as a fallback for tabs that predate
 the extension loading), and the tab list is gathered with a single
-`chrome.tabs.query` rather than a `chrome.tabs.get` per entry.
+`chrome.tabs.query` rather than a `chrome.tabs.get` per entry. It runs from
+`document_start`, so it is listening from the first moment of a page load,
+ahead of the page's own scripts; at `document_idle`, a press on a page still
+loading went unheard and the panel waited on a release it had missed.
 
 Commands are queued per window, because OS key-repeat can deliver a new command
 before the previous one's async work has finished.
