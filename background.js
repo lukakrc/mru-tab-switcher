@@ -1,6 +1,6 @@
 import { log, errMsg } from './lib/log.js';
 import { withTimeout } from './lib/async.js';
-import { activateTab, displayTitle, faviconUrlFor } from './lib/tabs.js';
+import { activateTab, displayTitle, faviconUrlFor, zoomOf } from './lib/tabs.js';
 import {
   ensureMru,
   forgetWindow,
@@ -183,9 +183,11 @@ async function startCycle(tab) {
   const startedAt = Date.now();
   const ids = mruIds(windowId);
 
-  let built;
+  // The zoom rides along in the same parallel step: it is needed before the
+  // panel can be drawn at the right size, so it is on the critical path too.
+  let built, zoom;
   try {
-    built = await buildTabInfos(windowId, ids);
+    [built, zoom] = await Promise.all([buildTabInfos(windowId, ids), zoomOf(tab.id)]);
   } catch (e) {
     log('startCycle: could not read the window', { error: errMsg(e) });
     return;
@@ -214,7 +216,7 @@ async function startCycle(tab) {
   // once the reply came in. Claiming early also stands thumbnail capture down
   // while the panel is appearing.
   const claim = setCycleState(windowId, { tabInfos, index: startIndex, overlayTabId: tab.id });
-  const shown = await tryShowOverlay(tab.id, tabInfos, startIndex);
+  const shown = await tryShowOverlay(tab.id, tabInfos, startIndex, { zoom });
   // Ended while the panel was going up; whoever ended it has already switched
   // or cancelled, and taken the panel down.
   if (getCycle(windowId) !== claim) return;
@@ -271,9 +273,9 @@ async function continueOnTarget(windowId, tabInfos, index, startedAt) {
   // stands down. A screenshot taken a moment later would have the panel in it,
   // and thumbnails are cached by URL, so it would stick.
   const claim = setCycleState(windowId, { tabInfos, index, overlayTabId: target.id });
-  await activateTab(target.id);
+  const [, zoom] = await Promise.all([activateTab(target.id), zoomOf(target.id)]);
 
-  const shown = await tryShowOverlay(target.id, tabInfos, index, { landed: true });
+  const shown = await tryShowOverlay(target.id, tabInfos, index, { landed: true, zoom });
   if (getCycle(windowId) !== claim) return; // ended while the panel was going up
   if (!shown) {
     // The target is a browser page too. The switch stands; there is no panel.

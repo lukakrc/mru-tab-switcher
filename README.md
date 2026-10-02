@@ -122,6 +122,20 @@ for an opaque one.
 In Windows High Contrast mode, which removes box-shadows, the selection is drawn
 as an outline in the system highlight colour instead.
 
+### Page zoom
+
+The panel is drawn inside the page, so it would inherit the page's zoom: at
+110% every card came out 10% larger. It is browser chrome, not page content, so
+it now stays the same size at any zoom. The background reads the tab's zoom with
+`chrome.tabs.getZoom` (in the same parallel step as the tab list, since it is
+needed before the first paint) and sends it with `show`. The overlay sets the
+inverse as CSS `zoom` on its host, folding in any CSS zoom the site has put on
+`<html>` itself, and converts everything it measures from the page into the
+panel's own pixels: the window size the grid is fitted to, and the pointer
+travel that hands the selection to the mouse. The height cap is set from
+script rather than with `vh`, because Chrome scales viewport units by an
+element's CSS zoom.
+
 ### Pointer vs keyboard selection
 
 Hovering a card selects it, but only after the pointer travels

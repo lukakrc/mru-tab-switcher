@@ -140,12 +140,13 @@
       gap: ${GRID_GAP_PX}px;
       padding: ${PANEL_PADDING_PX}px;
       /* A window too short for every row scrolls inside the panel rather than
-         pushing cards off-screen; setActive keeps the selection in view.
-         border-box so the cap includes the padding — content-box let the
-         panel run 20px past it and sit closer to the window edge than
-         VIEWPORT_MARGIN_PX. */
+         pushing cards off-screen; setActive keeps the selection in view. The
+         height cap is set in buildPanel, not here with vh: the host is zoomed
+         to cancel the page's zoom, and Chrome scales viewport units by that
+         zoom too. border-box so the cap includes the padding — content-box
+         let the panel run 20px past it and sit closer to the window edge
+         than VIEWPORT_MARGIN_PX. */
       box-sizing: border-box;
-      max-height: calc(100vh - ${2 * VIEWPORT_MARGIN_PX}px);
       overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
@@ -399,6 +400,11 @@
   let cardEls = [];
   let tabsData = [];
   let currentIndex = 0;
+  // The tab's browser zoom, as the background reported it (1 = 100%). The panel
+  // is chrome, not page content, so it should look the same at any zoom: the
+  // host is scaled by the inverse, and everything measured from the page (the
+  // window size, pointer travel) is converted into the panel's own pixels.
+  let pageZoom = 1;
   // How far the pointer must travel before it may take the selection from the
   // keyboard. The panel often appears directly under a resting cursor, and any
   // threshold below "a deliberate move" means an accidental nudge decides which
@@ -481,8 +487,14 @@
   // which keeps the one-or-two-row shape through moderately narrow windows;
   // only once they would fall below MIN_CARD_WIDTH_PX does a column go and the
   // tabs flow onto another row.
+  // The window's size in the panel's pixels. innerWidth/innerHeight are in the
+  // page's, which a 110% zoom makes 10% larger than the panel's.
+  function viewportSize() {
+    return { width: window.innerWidth * pageZoom, height: window.innerHeight * pageZoom };
+  }
+
   function gridFor(count) {
-    const available = window.innerWidth - 2 * (VIEWPORT_MARGIN_PX + PANEL_PADDING_PX);
+    const available = viewportSize().width - 2 * (VIEWPORT_MARGIN_PX + PANEL_PADDING_PX);
     const widthAt = (cols) => Math.floor((available - (cols - 1) * GRID_GAP_PX) / cols);
     let columns = Math.min(Math.max(count, 1), MAX_COLUMNS);
     while (columns > 1 && widthAt(columns) < MIN_CARD_WIDTH_PX) columns--;
@@ -497,9 +509,16 @@
     style.textContent = STYLE;
     shadow.appendChild(style);
 
+    // Cancels both kinds of zoom the host would otherwise inherit: the browser's
+    // (Cmd/Ctrl +), and CSS zoom some sites set on <html> itself, which the host
+    // sits directly under. currentCSSZoom is that element's effective zoom.
+    const htmlZoom = document.documentElement.currentCSSZoom || 1;
+    host.style.zoom = String(1 / (pageZoom * htmlZoom));
+
     const panel = div('panel');
     const { columns, cardWidth } = gridFor(tabsData.length);
     panel.style.gridTemplateColumns = `repeat(${columns}, ${cardWidth}px)`;
+    panel.style.maxHeight = `${Math.floor(viewportSize().height) - 2 * VIEWPORT_MARGIN_PX}px`;
 
     cardEls = tabsData.map((tab, i) => {
       const card = buildCard(tab, i);
@@ -718,7 +737,9 @@
 
     const dx = e.clientX - hoverAnchorX;
     const dy = e.clientY - hoverAnchorY;
-    if (dx * dx + dy * dy < HOVER_ENGAGE_PX * HOVER_ENGAGE_PX) return;
+    // clientX/Y are page pixels; the threshold is meant in the panel's.
+    const engage = HOVER_ENGAGE_PX / pageZoom;
+    if (dx * dx + dy * dy < engage * engage) return;
 
     const idx = cardIndexFromEvent(e);
     if (idx === -1 || idx === currentIndex) return;
@@ -767,11 +788,15 @@
     };
   }
 
-  function showOverlay(tabs, index, debug, landed) {
+  function showOverlay(tabs, index, debug, landed, zoom) {
     debugMode = !!debug;
     // Only a fresh panel can be landed; a rebuild mid-cycle (a tab closed)
     // keeps whatever state the cycle is already in.
     if (!host) landedPending = !!landed;
+    // Likewise only a fresh panel is sure to be told the zoom. A rebuild keeps
+    // the one it has, since the page it is drawn on hasn't changed.
+    if (zoom > 0) pageZoom = zoom;
+    else if (!host) pageZoom = 1;
     dlog('show', { tabs: tabs.length, index, hasFocus: document.hasFocus() });
     // A 'show' can arrive while the panel is already up — a tab closing rebuilds
     // the list, and a restarted cycle re-sends it. Rebuilding then means
@@ -838,7 +863,7 @@
     // threw while building would still be reported as shown.
     try {
       if (msg.type === 'show') {
-        showOverlay(msg.tabs, msg.index, msg.debug, msg.landed);
+        showOverlay(msg.tabs, msg.index, msg.debug, msg.landed, msg.zoom);
         sendResponse(panelState());
       } else if (msg.type === 'update') {
         // No panel means the page navigated since the cycle began, or the panel
