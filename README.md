@@ -3,7 +3,7 @@
 # MRU Tab Switcher
 
 Arc-style most-recently-used tab switching for Chrome. Hold `Control` and tap
-`Tab` to cycle through up to 12 recent tabs in a translucent overlay showing
+`Tab` to cycle through up to 6 recent tabs in a translucent overlay showing
 live page thumbnails; release `Control` to jump to the highlighted tab. Hover
 and click work too, and `Escape` cancels.
 
@@ -96,10 +96,10 @@ panel included; only its default *Dynamic* mode is kept out.
 At full size six 190px columns need about 1180px, so a narrower window — two
 side by side on a laptop, say — used to clip the outer columns off both edges,
 the current tab included. The grid now fits the window: cards shrink first,
-down to `MIN_CARD_WIDTH_PX` (140), which keeps the one-row-up-to-six,
-then-two-rows shape through moderately narrow windows; only below that does a
-column go and the tabs flow onto another row. A window too short for every row
-scrolls inside the panel, and the selection is kept in view.
+down to `MIN_CARD_WIDTH_PX` (140), which keeps every tab in a single row
+through moderately narrow windows; only below that does a column go and the
+tabs flow onto another row. A window too short for every row scrolls inside the
+panel, and the selection is kept in view.
 
 ### Appearing
 

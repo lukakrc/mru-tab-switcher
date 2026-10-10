@@ -3,6 +3,7 @@
   window.__mruOverlayLoaded = true;
 
   const CARD_WIDTH_PX = 190;
+  // Matches MAX_TABS in lib/mru.js, so a full cycle sits on a single row.
   const MAX_COLUMNS = 6;
   const PANEL_PADDING_PX = 10;
   const GRID_GAP_PX = 4;
@@ -490,7 +491,7 @@
   // Fit the grid to the window. At full size six columns need ~1180px, so any
   // narrower window — two side by side on a laptop, say — used to clip the
   // outer columns off both edges, the current tab included. Cards shrink first,
-  // which keeps the one-or-two-row shape through moderately narrow windows;
+  // which keeps every tab in one row through moderately narrow windows;
   // only once they would fall below MIN_CARD_WIDTH_PX does a column go and the
   // tabs flow onto another row.
   // The window's size in the panel's pixels. innerWidth/innerHeight are in the
