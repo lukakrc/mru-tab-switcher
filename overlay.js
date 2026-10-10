@@ -488,18 +488,18 @@
     return card;
   }
 
-  // Fit the grid to the window. At full size six columns need ~1180px, so any
-  // narrower window — two side by side on a laptop, say — used to clip the
-  // outer columns off both edges, the current tab included. Cards shrink first,
-  // which keeps every tab in one row through moderately narrow windows;
-  // only once they would fall below MIN_CARD_WIDTH_PX does a column go and the
-  // tabs flow onto another row.
   // The window's size in the panel's pixels. innerWidth/innerHeight are in the
   // page's, which a 110% zoom makes 10% larger than the panel's.
   function viewportSize() {
     return { width: window.innerWidth * pageZoom, height: window.innerHeight * pageZoom };
   }
 
+  // Fit the grid to the window. At full size six columns need ~1180px, so any
+  // narrower window — two side by side on a laptop, say — used to clip the
+  // outer columns off both edges, the current tab included. Cards shrink first,
+  // which keeps every tab in one row through moderately narrow windows; only
+  // once they would fall below MIN_CARD_WIDTH_PX does a column go and the tabs
+  // flow onto another row.
   function gridFor(count) {
     const available = viewportSize().width - 2 * (VIEWPORT_MARGIN_PX + PANEL_PADDING_PX);
     const widthAt = (cols) => Math.floor((available - (cols - 1) * GRID_GAP_PX) / cols);
