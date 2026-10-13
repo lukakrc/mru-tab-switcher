@@ -127,15 +127,13 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 // Resolve the MRU id list into everything a card needs to render. One query for
 // the whole window rather than a chrome.tabs.get per entry: those awaits ran
-// sequentially, so a full list cost a dozen round-trips before anything could
+// sequentially, so a full list cost a round-trip per card before anything could
 // render — long enough that a quick tap-and-release was already over by the time
 // the overlay appeared, making it flash and vanish. Everything here is on the
-// critical path before the first paint.
+// critical path before the first paint, hence the one parallel step.
 async function buildTabInfos(windowId, ids) {
   const byId = new Map();
   const groupById = new Map();
-  // Both in one parallel step — everything here is on the critical path
-  // before the overlay can paint.
   const [tabs, groups] = await Promise.all([
     chrome.tabs.query({ windowId }),
     chrome.tabGroups.query({ windowId }).catch(() => []),
@@ -163,15 +161,6 @@ async function buildTabInfos(windowId, ids) {
     });
   }
   return { tabInfos, windowTabs: byId.size };
-}
-
-// Whether the hold was over before the panel painted, so no keyup is coming to
-// close it. `released` is the page's own record of the modifier being up, which
-// holds however long the worker took to wake. releasedAt still matters for a
-// release followed by a fresh press before the panel arrived: the first tap was
-// a whole gesture of its own.
-function holdEnded(shown, startedAt) {
-  return shown.released === true || shown.releasedAt >= startedAt;
 }
 
 async function startCycle(tab) {
@@ -292,6 +281,15 @@ async function presentCycle(windowId, claim, extra, startedAt) {
 
   setCycleState(windowId, { ...claim, focused: shown.focused !== false });
   return 'holding';
+}
+
+// Whether the hold was over before the panel painted, so no keyup is coming to
+// close it. `released` is the page's own record of the modifier being up, which
+// holds however long the worker took to wake. releasedAt still matters for a
+// release followed by a fresh press before the panel arrived: the first tap was
+// a whole gesture of its own.
+function holdEnded(shown, startedAt) {
+  return shown.released === true || shown.releasedAt >= startedAt;
 }
 
 /* ------------------------------------------------------------------ *
